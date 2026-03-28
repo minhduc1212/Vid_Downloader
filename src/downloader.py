@@ -1,0 +1,159 @@
+import os
+import yt_dlp
+import requests
+import re
+import time
+import json
+import subprocess
+
+class VideoDownloader:
+    def __init__(self, output_folder="Output", keep_raw_files=False):
+        """
+        Initialize the VideoDownloader.
+        
+        :param output_folder: The directory where downloaded videos will be saved.
+        :param keep_raw_files: Whether to keep the raw audio and video files after merging.
+        """
+        self.output_folder = output_folder
+        self.keep_raw_files = keep_raw_files
+
+    def download_video(self, url):
+        """
+        Downloads a video from the given URL.
+        Supports YouTube, Facebook, Instagram, TikTok, and many more.
+        
+        :param url: The URL of the video to download.
+        """
+        if "facebook.com" in url or "fb.watch" in url:
+            self.download_facebook_video(url)
+            return
+
+        ydl_opts = {
+            'outtmpl': os.path.join(self.output_folder, '%(title)s.%(ext)s'),
+            'keepvideo': self.keep_raw_files,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'merge_output_format': 'mp4',
+            'quiet': False,
+            'no_warnings': False,
+        }
+
+        try:
+            print(f"Downloading video from {url}...")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as e:
+            print(f"Failed to download video: {e}")
+
+    def download_file(self, link, file_name):
+        headers = {
+            'user-agent': 'Mozilla/5.0 (Windows NT 6.3; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.193 Safari/537.36'
+        }
+        try:
+            resp = requests.get(link, headers=headers).content
+        except:
+            print("Failed to open {}".format(link))
+            return
+        with open(os.path.join(self.output_folder, file_name), 'wb') as f:
+            f.write(resp)
+
+    def download_facebook_video(self, link):
+        headers = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Dnt': '1',
+            'Dpr': '1.3125',
+            'Priority': 'u=0, i',
+            'Sec-Ch-Prefers-Color-Scheme': 'dark',
+            'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+            'Sec-Ch-Ua-Full-Version-List': '"Chromium";v="124.0.6367.156", "Google Chrome";v="124.0.6367.156", "Not-A.Brand";v="99.0.0.0"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Model': '""',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+            'Sec-Ch-Ua-Platform-Version': '"15.0.0"',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Viewport-Width': '1463'
+        }
+        try:
+            print(f"Fetching Facebook video info from {link}...")
+            resp = requests.get(link, headers=headers)
+            resp.raise_for_status()
+            html = resp.text
+        except Exception as e:
+            print(f"Failed to open {link}: {e}")
+            return
+
+        # Extract video ID for naming
+        video_id_match = re.search(r'(?:/videos/|/watch/\?v=|/reel/|/reels/|/posts/)([0-9]+)', resp.url)
+        video_id = video_id_match.group(1) if video_id_match else str(int(time.time()))
+        final_dest = os.path.join(self.output_folder, f'{video_id}.mp4')
+
+        
+        hd_match = re.search(r'"browser_native_hd_url":"([^"]+)"', html) or re.search(r'"playable_url_quality_hd":"([^"]+)"', html)
+        sd_match = re.search(r'"browser_native_sd_url":"([^"]+)"', html) or re.search(r'"playable_url":"([^"]+)"', html)
+
+        video_url = None
+        if hd_match:
+            video_url = json.loads(f'"{hd_match.group(1)}"')
+            print("Found direct HD video URL.")
+        elif sd_match:
+            video_url = json.loads(f'"{sd_match.group(1)}"')
+            print("Found direct SD video URL.")
+
+        if video_url:
+            print("Downloading direct video...")
+            self.download_file(video_url, f'{video_id}.mp4')
+            print(f"Successfully downloaded to {final_dest}")
+            return
+
+        dash_match = re.search(r'"dash_prefetch_experimental":\[([^\]]+)\]', html)
+        if dash_match:
+            try:
+                sources = json.loads(f"[{dash_match.group(1)}]")
+                if len(sources) >= 2:
+                    video_rep, audio_rep = sources[0], sources[1]
+                    
+                    video_link_match = re.search(f'"representation_id":"{video_rep}"[\\s\\S]*?"base_url":"([^"]+)"', html)
+                    audio_link_match = re.search(f'"representation_id":"{audio_rep}"[\\s\\S]*?"base_url":"([^"]+)"', html)
+                    
+                    if video_link_match and audio_link_match:
+                        video_link = json.loads(f'"{video_link_match.group(1)}"')
+                        audio_link = json.loads(f'"{audio_link_match.group(1)}"')
+                        
+                        print("Found DASH video and audio URLs. Downloading...")
+                        self.download_file(video_link, 'video.mp4')
+                        self.download_file(audio_link, 'audio.mp4')
+                        
+                        video_path = os.path.join(self.output_folder, 'video.mp4')
+                        audio_path = os.path.join(self.output_folder, 'audio.mp4')
+                        
+                        print("Merging files...")
+                        cmd = f'ffmpeg -y -hide_banner -loglevel error -i "{video_path}" -i "{audio_path}" -c copy "{final_dest}"'
+                        subprocess.call(cmd, shell=True)
+                        
+                        if not self.keep_raw_files:
+                            if os.path.exists(video_path): os.remove(video_path)
+                            if os.path.exists(audio_path): os.remove(audio_path)
+                            
+                        print(f"Successfully downloaded and merged to {final_dest}")
+                        return
+            except Exception as e:
+                print(f"DASH extraction failed: {e}")
+
+        print("Falling back to yt-dlp for Facebook video extraction...")
+        ydl_opts = {
+            'outtmpl': os.path.join(self.output_folder, f'{video_id}.%(ext)s'),
+            'keepvideo': self.keep_raw_files,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'merge_output_format': 'mp4',
+            'quiet': False,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([link])
+        except Exception as e:
+            print(f"yt-dlp failed to download Facebook video: {e}")
