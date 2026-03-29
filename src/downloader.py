@@ -5,6 +5,7 @@ import re
 import time
 import json
 import subprocess
+import random
 
 class VideoDownloader:
     def __init__(self, output_folder="Output", keep_raw_files=False):
@@ -26,6 +27,10 @@ class VideoDownloader:
         """
         if "facebook.com" in url or "fb.watch" in url:
             self.download_facebook_video(url)
+            return
+            
+        if "instagram.com" in url:
+            self.download_instagram_video(url)
             return
 
         ydl_opts = {
@@ -157,3 +162,81 @@ class VideoDownloader:
                 ydl.download([link])
         except Exception as e:
             print(f"yt-dlp failed to download Facebook video: {e}")
+
+    def download_instagram_video(self, url):
+        match = re.search(r'instagram\.com/(?:p|reel|tv)/([^/?#&]+)', url)
+        if not match:
+            print("Could not extract Instagram shortcode from URL.")
+            return
+            
+        shortcode = match.group(1)
+        
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'vi,en-US;q=0.9,en;q=0.8',
+            'Referer': 'https://www.instagram.com/',
+        })
+        
+        try:
+            r = session.get('https://www.instagram.com/', timeout=10)
+            csrf = session.cookies.get('csrftoken', domain='.instagram.com')
+            if csrf:
+                session.headers.update({'X-CSRFToken': csrf})
+        except Exception as e:
+            print(f"Failed to get csrftoken: {e}")
+
+        sleep_time = random.uniform(3.0, 7.0)
+        print(f"Waiting {sleep_time:.2f}s to avoid rate limiting...")
+        time.sleep(sleep_time)
+        
+        doc_id = "8845758582119845"
+        variables = json.dumps({
+            "shortcode": shortcode,
+            "fetch_tagged_user_count": None,
+            "hoisted_comment_id": None,
+            "hoisted_reply_id": None
+        })
+
+        query_url = "https://www.instagram.com/graphql/query"
+        params = {"doc_id": doc_id, "variables": variables}
+
+        print(f"Fetching Instagram video info for shortcode: {shortcode}...")
+        try:
+            response = session.get(query_url, params=params, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                media = data.get('data', {}).get('xdt_shortcode_media')
+                if media:
+                    is_video = media.get('is_video', False)
+                    video_url = media.get('video_url') if is_video else None
+                    
+                    if not is_video:
+                        print("The provided Instagram link is not a video.")
+                        return
+                        
+                    if video_url:
+                        file_name = f"{shortcode}.mp4"
+                        print("Found direct video URL. Downloading...")
+                        self.download_file(video_url, file_name)
+                        print(f"Successfully downloaded to {os.path.join(self.output_folder, file_name)}")
+                        return
+                else:
+                    print("Could not find media in GraphQL response.")
+        except Exception as e:
+            print(f"GraphQL extraction failed: {e}")
+            
+        print("Falling back to yt-dlp for Instagram video extraction...")
+        ydl_opts = {
+            'outtmpl': os.path.join(self.output_folder, f'{shortcode}.%(ext)s'),
+            'keepvideo': self.keep_raw_files,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'merge_output_format': 'mp4',
+            'quiet': False,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as e:
+            print(f"yt-dlp failed to download Instagram video: {e}")
