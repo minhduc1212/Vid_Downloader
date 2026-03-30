@@ -32,6 +32,9 @@ class VideoDownloader:
         if "instagram.com" in url:
             self.download_instagram_video(url)
             return
+        if "tiktok.com" in url:
+            self.download_tiktok_video(url)
+            return
 
         ydl_opts = {
             'outtmpl': os.path.join(self.output_folder, '%(title)s.%(ext)s'),
@@ -240,3 +243,18 @@ class VideoDownloader:
                 ydl.download([url])
         except Exception as e:
             print(f"yt-dlp failed to download Instagram video: {e}")
+
+    def download_tiktok_video(self, url):
+        ydl_opts = {
+            'outtmpl': os.path.join(self.output_folder, '%(title)s.%(ext)s'),
+            'keepvideo': self.keep_raw_files,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'merge_output_format': 'mp4',
+            'quiet': False,
+        }
+        try:
+            print(f"Downloading TikTok video from {url}...")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as e:
+            print(f"Failed to download TikTok video: {e}")
