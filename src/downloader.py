@@ -18,25 +18,8 @@ class VideoDownloader:
         self.output_folder = output_folder
         self.keep_raw_files = keep_raw_files
 
-    def download_video(self, url):
-        """
-        Downloads a video from the given URL.
-        Supports YouTube, Facebook, Instagram, TikTok, and many more.
-        
-        :param url: The URL of the video to download.
-        """
-        if "facebook.com" in url or "fb.watch" in url:
-            self.download_facebook_video(url)
-            return
-            
-        if "instagram.com" in url:
-            self.download_instagram_video(url)
-            return
-        if "tiktok.com" in url:
-            self.download_tiktok_video(url)
-            return
-
-        ydl_opts = {
+    def _get_ydl_opts(self, progress_callback=None):
+        opts = {
             'outtmpl': os.path.join(self.output_folder, '%(title)s.%(ext)s'),
             'keepvideo': self.keep_raw_files,
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
@@ -44,7 +27,36 @@ class VideoDownloader:
             'quiet': False,
             'no_warnings': False,
         }
+        if progress_callback:
+            def hook(d):
+                if d['status'] == 'downloading':
+                    total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                    if total > 0:
+                        pct = int(d.get('downloaded_bytes', 0) / total * 100)
+                        progress_callback(pct)
+            opts['progress_hooks'] = [hook]
+        return opts
 
+    def download_video(self, url, progress_callback=None):
+        """
+        Downloads a video from the given URL.
+        Supports YouTube, Facebook, Instagram, TikTok, and many more.
+        
+        :param url: The URL of the video to download.
+        :param progress_callback: Function to call with download percentage (0-100).
+        """
+        if "facebook.com" in url or "fb.watch" in url:
+            self.download_facebook_video(url, progress_callback)
+            return
+            
+        if "instagram.com" in url:
+            self.download_instagram_video(url, progress_callback)
+            return
+        if "tiktok.com" in url:
+            self.download_tiktok_video(url, progress_callback)
+            return
+
+        ydl_opts = self._get_ydl_opts(progress_callback)
         try:
             print(f"Downloading video from {url}...")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -52,19 +64,26 @@ class VideoDownloader:
         except Exception as e:
             print(f"Failed to download video: {e}")
 
-    def download_file(self, link, file_name):
+    def download_file(self, link, file_name, progress_callback=None):
         headers = {
             'user-agent': 'Mozilla/5.0 (Windows NT 6.3; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.193 Safari/537.36'
         }
         try:
-            resp = requests.get(link, headers=headers).content
-        except:
-            print("Failed to open {}".format(link))
-            return
-        with open(os.path.join(self.output_folder, file_name), 'wb') as f:
-            f.write(resp)
+            resp = requests.get(link, headers=headers, stream=True)
+            resp.raise_for_status()
+            total = int(resp.headers.get('content-length', 0))
+            downloaded = 0
+            with open(os.path.join(self.output_folder, file_name), 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=1024*64):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total and progress_callback:
+                            progress_callback(int((downloaded / total) * 100))
+        except Exception as e:
+            print(f"Failed to download file {link}: {e}")
 
-    def download_facebook_video(self, link):
+    def download_facebook_video(self, link, progress_callback=None):
         headers = {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
             'Accept-Language': 'en-US,en;q=0.9',
@@ -114,7 +133,7 @@ class VideoDownloader:
 
         if video_url:
             print("Downloading direct video...")
-            self.download_file(video_url, f'{video_id}.mp4')
+            self.download_file(video_url, f'{video_id}.mp4', progress_callback)
             print(f"Successfully downloaded to {final_dest}")
             return
 
@@ -133,7 +152,8 @@ class VideoDownloader:
                         audio_link = json.loads(f'"{audio_link_match.group(1)}"')
                         
                         print("Found DASH video and audio URLs. Downloading...")
-                        self.download_file(video_link, 'video.mp4')
+                        self.download_file(video_link, 'video.mp4', progress_callback)
+                        # Avoid double progress reporting by not passing callback to audio
                         self.download_file(audio_link, 'audio.mp4')
                         
                         video_path = os.path.join(self.output_folder, 'video.mp4')
@@ -153,20 +173,15 @@ class VideoDownloader:
                 print(f"DASH extraction failed: {e}")
 
         print("Falling back to yt-dlp for Facebook video extraction...")
-        ydl_opts = {
-            'outtmpl': os.path.join(self.output_folder, f'{video_id}.%(ext)s'),
-            'keepvideo': self.keep_raw_files,
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'merge_output_format': 'mp4',
-            'quiet': False,
-        }
+        ydl_opts = self._get_ydl_opts(progress_callback)
+        ydl_opts['outtmpl'] = os.path.join(self.output_folder, f'{video_id}.%(ext)s')
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([link])
         except Exception as e:
             print(f"yt-dlp failed to download Facebook video: {e}")
 
-    def download_instagram_video(self, url):
+    def download_instagram_video(self, url, progress_callback=None):
         match = re.search(r'instagram\.com/(?:p|reel|tv)/([^/?#&]+)', url)
         if not match:
             print("Could not extract Instagram shortcode from URL.")
@@ -222,7 +237,7 @@ class VideoDownloader:
                     if video_url:
                         file_name = f"{shortcode}.mp4"
                         print("Found direct video URL. Downloading...")
-                        self.download_file(video_url, file_name)
+                        self.download_file(video_url, file_name, progress_callback)
                         print(f"Successfully downloaded to {os.path.join(self.output_folder, file_name)}")
                         return
                 else:
@@ -231,27 +246,16 @@ class VideoDownloader:
             print(f"GraphQL extraction failed: {e}")
             
         print("Falling back to yt-dlp for Instagram video extraction...")
-        ydl_opts = {
-            'outtmpl': os.path.join(self.output_folder, f'{shortcode}.%(ext)s'),
-            'keepvideo': self.keep_raw_files,
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'merge_output_format': 'mp4',
-            'quiet': False,
-        }
+        ydl_opts = self._get_ydl_opts(progress_callback)
+        ydl_opts['outtmpl'] = os.path.join(self.output_folder, f'{shortcode}.%(ext)s')
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
         except Exception as e:
             print(f"yt-dlp failed to download Instagram video: {e}")
 
-    def download_tiktok_video(self, url):
-        ydl_opts = {
-            'outtmpl': os.path.join(self.output_folder, '%(title)s.%(ext)s'),
-            'keepvideo': self.keep_raw_files,
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'merge_output_format': 'mp4',
-            'quiet': False,
-        }
+    def download_tiktok_video(self, url, progress_callback=None):
+        ydl_opts = self._get_ydl_opts(progress_callback)
         try:
             print(f"Downloading TikTok video from {url}...")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
