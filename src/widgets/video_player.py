@@ -43,7 +43,7 @@ class VideoPlayerWidget(QWidget):
         # Mute audio during seek to prevent audible glitches/chirps.
         self._unmute_timer = QTimer(self)
         self._unmute_timer.setSingleShot(True)
-        self._unmute_timer.setInterval(300)
+        self._unmute_timer.setInterval(150)
         self._unmute_timer.timeout.connect(lambda: self.audio_output.setMuted(False))
 
         # ── Media engine ────────────────────────────

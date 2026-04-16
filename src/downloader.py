@@ -55,6 +55,9 @@ class VideoDownloader:
         if "tiktok.com" in url:
             self.download_tiktok_video(url, progress_callback)
             return
+        if "douyin.com" in url:
+            self.download_douyin_video(url, progress_callback)
+            return
 
         ydl_opts = self._get_ydl_opts(progress_callback)
         try:
@@ -262,3 +265,75 @@ class VideoDownloader:
                 ydl.download([url])
         except Exception as e:
             print(f"Failed to download TikTok video: {e}")
+
+    def download_douyin_video(self, url, progress_callback=None):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            print("Playwright is not installed. Falling back to yt-dlp...")
+            ydl_opts = self._get_ydl_opts(progress_callback)
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+            except Exception as e:
+                print(f"yt-dlp failed to download Douyin video: {e}")
+            return
+
+        user_data_dir = "./douyin_profile"
+        print(f"Fetching Douyin video info from {url}...")
+
+        with sync_playwright() as p:
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+                viewport={'width': 1280, 'height': 720}
+            )
+            
+            page = context.new_page()
+            page.set_default_timeout(60000)
+
+            result = {"full_mp4": None}
+
+            def handle_response(response):
+                if "aweme/v1/web/aweme/detail" in response.url:
+                    try:
+                        json_data = response.json()
+                        play_addr = json_data['aweme_detail']['video']['play_addr']['url_list'][0]
+                        result["full_mp4"] = play_addr.replace("http://", "https://")
+                        print(f"Found Douyin direct video URL: {result['full_mp4'][:80]}...")
+                    except Exception:
+                        pass
+
+            page.on("response", handle_response)
+            
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                for _ in range(20): 
+                    if result["full_mp4"]:
+                        break
+                    page.wait_for_timeout(500)
+            except Exception as e:
+                if not result["full_mp4"]:
+                    print(f"Timeout or error extracting Douyin video link: {e}")
+
+            video_url = result.get("full_mp4")
+            context.close()
+
+        if video_url:
+            video_id_match = re.search(r'/video/(\d+)', url)
+            video_id = video_id_match.group(1) if video_id_match else str(int(time.time()))
+            file_name = f"douyin_{video_id}.mp4"
+            
+            print("Downloading Douyin video...")
+            # We take advantage of the class' built-in chunked downloader
+            self.download_file(video_url, file_name, progress_callback)
+            print(f"Successfully downloaded to {os.path.join(self.output_folder, file_name)}")
+        else:
+            print("Could not find Douyin video URL. Falling back to yt-dlp...")
+            ydl_opts = self._get_ydl_opts(progress_callback)
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+            except Exception as e:
+                print(f"yt-dlp failed to download Douyin video: {e}")
