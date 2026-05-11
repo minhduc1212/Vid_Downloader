@@ -192,18 +192,24 @@ class FlatDesignUI(QMainWindow):
 
     def on_download_finished(self, card, worker):
         """Slot for successful download completion."""
-        card.deleteLater()
+        try:
+            card.deleteLater()
+        except RuntimeError:
+            pass
         if worker in self.workers:
             self.workers.remove(worker)
         self.collection_page.refresh()
 
     def on_download_error(self, card, worker, error_msg):
         """Slot to handle download errors."""
-        card.name_lbl.setText(f"Failed — {error_msg[:48]}")
-        card.name_lbl.setStyleSheet(_label_qss("#FF3B3B", 12, "600"))
-        card.status_dot.setText("●")
-        card.status_dot.setStyleSheet(
-            "color: #FF3B3B; font-size: 10px; border: none; background: transparent;"
-        )
+        try:
+            card.name_lbl.setText(f"Failed — {error_msg[:48]}")
+            card.name_lbl.setStyleSheet(_label_qss("#FF3B3B", 12, "600"))
+            card.status_dot.setText("●")
+            card.status_dot.setStyleSheet(
+                "color: #FF3B3B; font-size: 10px; border: none; background: transparent;"
+            )
+        except RuntimeError:
+            pass
         if worker in self.workers:
             self.workers.remove(worker)
